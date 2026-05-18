@@ -52,6 +52,14 @@ SEND_EMAIL_SMTP_PORT="${SEND_EMAIL_SMTP_PORT:-587}"
 SEND_EMAIL_SMTP_USER="${SEND_EMAIL_SMTP_USER:-user@example.com}"
 SEND_EMAIL_SMTP_PASS="${SEND_EMAIL_SMTP_PASS:-password}"
 
+CODEX_MODEL_PROVIDER="${CODEX_MODEL_PROVIDER:-token}"
+CODEX_BASE_URL="${CODEX_BASE_URL:-https://token.renzhe.org/v1}"
+CODEX_MODEL="${CODEX_MODEL:-gpt-5.4-mini}"
+CODEX_REASONING="${CODEX_REASONING:-medium}"
+CODEX_DIR="${CODEX_DIR:-$HOME/.codex}"
+CODEX_CONFIG_FILE="${CODEX_CONFIG_FILE:-$CODEX_DIR/config.toml}"
+CODEX_AUTH_FILE="${CODEX_AUTH_FILE:-$CODEX_DIR/auth.json}"
+
 pause() {
   printf "\n按回车继续..."
   read -r _
@@ -187,6 +195,14 @@ docker_list_containers() {
   docker ps -a --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
 }
 
+docker_list_images() {
+  if ! require_docker; then
+    return 0
+  fi
+
+  docker images --format 'table {{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.Size}}'
+}
+
 docker_prompt_container_name() {
   local container_name
   read -rp "请输入容器名: " container_name
@@ -281,6 +297,11 @@ docker_create_container() {
 docker_menu() {
   while true; do
     print_header
+    echo "【Docker 概览：全部容器】"
+    docker_list_containers
+    printf "\n【Docker 概览：全部镜像】\n"
+    docker_list_images
+    printf "\n"
     cat <<'MENU'
 【Docker 基础管理】
 1. 查看容器列表
@@ -288,11 +309,13 @@ docker_menu() {
 3. 停止容器
 4. 重启容器
 5. 删除容器
-6. 创建容器
-7. CLIProxyAPI（Docker Compose）
-8. V2RayA代理管理面板（Docker Compose）
-9. SQL Server数据库服务（Docker Compose）
-10. Nginx静态应用站（Docker Compose）
+--------------------
+6. CLIProxyAPI（Docker Compose）
+7. V2RayA代理管理面板（Docker Compose）
+8. SQL Server数据库服务（Docker Compose）
+9. Nginx静态应用站（Docker Compose）
+10. UptimeNode监控面板（Docker Compose）
+11. SendEmail邮件服务（Docker Compose）
 0. 返回主菜单
 MENU
 
@@ -319,25 +342,67 @@ MENU
         pause
         ;;
       6)
-        docker_create_container
-        pause
-        ;;
-      7)
         cli_proxy_menu
         ;;
-      8)
+      7)
         v2raya_menu
         ;;
-      9)
+      8)
         sqlserver_menu
         ;;
-      10)
+      9)
         nginx_static_menu
         ;;
-      11)
+      10)
         uptimenode_menu
         ;;
-      12)
+      11)
+        sendemail_menu
+        ;;
+      0)
+        break
+        ;;
+      *)
+        echo "无效选择。"
+        pause
+        ;;
+    esac
+  done
+}
+
+docker_compose_menu() {
+  while true; do
+    print_header
+    cat <<'MENU'
+【Docker Compose 服务】
+--------------------
+1. CLIProxyAPI（Docker Compose）
+2. V2RayA代理管理面板（Docker Compose）
+3. SQL Server数据库服务（Docker Compose）
+4. Nginx静态应用站（Docker Compose）
+5. UptimeNode监控面板（Docker Compose）
+6. SendEmail邮件服务（Docker Compose）
+0. 返回上级菜单
+MENU
+
+    read -rp "请选择: " choice
+    case "$choice" in
+      1)
+        cli_proxy_menu
+        ;;
+      2)
+        v2raya_menu
+        ;;
+      3)
+        sqlserver_menu
+        ;;
+      4)
+        nginx_static_menu
+        ;;
+      5)
+        uptimenode_menu
+        ;;
+      6)
         sendemail_menu
         ;;
       0)
@@ -810,14 +875,16 @@ MENU
   done
 }
 
-# Nginx 静态站点：按域名生成独立目录和 compose。
+# Nginx 静态站点：按域名生成独立目录和 compose，容器名与域名保持一致。
 nginx_static_prepare_site() {
-  local domain_name safe_name site_dir index_file host_port
-  read -rp "请输入域名（作为容器名）: " domain_name
+  local domain_name container_name safe_name site_dir index_file host_port
+  read -rp "请输入域名（同时作为容器名）: " domain_name
   if [ -z "$domain_name" ]; then
     echo "域名不能为空。"
     return 1
   fi
+
+  container_name="$domain_name"
 
   read -rp "请输入对外端口（默认 80）: " host_port
   host_port="${host_port:-80}"
@@ -848,7 +915,7 @@ EOF_INDEX
 services:
   nginx-static:
     image: ${NGINX_STATIC_IMAGE}
-    container_name: ${domain_name}
+    container_name: ${container_name}
     restart: unless-stopped
     ports:
       - "${host_port}:80"
@@ -1087,6 +1154,23 @@ EMAIL_TO=$SEND_EMAIL_TO
 EOF
 }
 
+sendemail_compose_file() {
+  local compose_file
+  for compose_file in \
+    "$SEND_EMAIL_DIR/docker-compose.yml" \
+    "$SEND_EMAIL_DIR/docker-compose.yaml" \
+    "$SEND_EMAIL_DIR/compose.yml" \
+    "$SEND_EMAIL_DIR/compose.yaml"
+  do
+    if [ -f "$compose_file" ]; then
+      printf '%s' "$compose_file"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 sendemail_install() {
   if ! require_docker; then
     return 0
@@ -1098,16 +1182,19 @@ sendemail_install() {
   fi
 
   sendemail_clone_repo
-  if [ -f "$SEND_EMAIL_DIR/.env.example" ] && [ ! -f "$SEND_EMAIL_DIR/.env" ]; then
+  if [ -f "$SEND_EMAIL_DIR/.env" ]; then
+    echo "已发现本地 .env，跳过写入。"
+  elif [ -f "$SEND_EMAIL_DIR/.env.example" ]; then
     cp "$SEND_EMAIL_DIR/.env.example" "$SEND_EMAIL_DIR/.env"
-  fi
-  sendemail_write_env
-  if [ -f "$SEND_EMAIL_DIR/docker-compose.yml" ]; then
-    (cd "$SEND_EMAIL_DIR" && docker compose up -d --build)
   else
-    echo "仓库中未找到 docker-compose.yml，请先检查仓库内容。"
-    return 1
+    sendemail_write_env
   fi
+  local compose_file
+  compose_file="$(sendemail_compose_file)" || {
+    echo "仓库中未找到 docker-compose.yml / docker-compose.yaml / compose.yml / compose.yaml，请先检查仓库内容。"
+    return 1
+  }
+  (cd "$SEND_EMAIL_DIR" && docker compose -f "$compose_file" up -d --build)
   echo "SendEmail 已启动。"
 }
 
@@ -1121,7 +1208,13 @@ sendemail_start() {
     return 1
   fi
 
-  (cd "$SEND_EMAIL_DIR" && docker compose up -d)
+  local compose_file
+  compose_file="$(sendemail_compose_file)" || {
+    echo "未找到 SendEmail 的 compose 文件。"
+    return 1
+  }
+
+  (cd "$SEND_EMAIL_DIR" && docker compose -f "$compose_file" up -d)
 }
 
 sendemail_stop() {
@@ -1134,7 +1227,13 @@ sendemail_stop() {
     return 1
   fi
 
-  (cd "$SEND_EMAIL_DIR" && docker compose down)
+  local compose_file
+  compose_file="$(sendemail_compose_file)" || {
+    echo "未找到 SendEmail 的 compose 文件。"
+    return 1
+  }
+
+  (cd "$SEND_EMAIL_DIR" && docker compose -f "$compose_file" down)
 }
 
 sendemail_menu() {
@@ -2525,8 +2624,7 @@ codex_cli_config_api_mode() {
   input_model="${input_model:-$CODEX_MODEL}"
   read -rp "推理强度（low/medium/high）[${CODEX_REASONING}]: " input_reasoning
   input_reasoning="${input_reasoning:-$CODEX_REASONING}"
-  read -rsp "OpenAI API Key（可选，回车跳过）: " input_api_key
-  echo
+  read -rp "OpenAI API Key（可选，回车跳过）: " input_api_key
 
   CODEX_MODEL_PROVIDER="$input_model_provider"
   CODEX_BASE_URL="$input_base_url"
@@ -2546,7 +2644,7 @@ codex_cli_config_api_mode() {
 codex_cli_launch() {
   if command -v codex >/dev/null 2>&1; then
     echo "启动 Codex CLI..."
-    codex
+    CODEX_HOME="$CODEX_DIR" codex
   else
     echo "未找到 codex，请先执行安装/升级。"
   fi
