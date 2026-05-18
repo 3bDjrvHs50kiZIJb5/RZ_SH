@@ -2500,7 +2500,6 @@ codex_cli_install_or_upgrade() {
     return 1
   fi
 
-  send_stats "安装或升级CodeX CLI"
   echo "开始安装/升级 CodeX CLI..."
   npm install -g @openai/codex
   if command -v codex >/dev/null 2>&1; then
