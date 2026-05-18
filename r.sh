@@ -20,6 +20,7 @@ V2RAYA_IMAGE="${V2RAYA_IMAGE:-mzz2017/v2raya:v2.2.6.4}"
 V2RAYA_CONTAINER_NAME="${V2RAYA_CONTAINER_NAME:-v2raya}"
 V2RAYA_PORT="${V2RAYA_PORT:-2017}"
 V2RAYA_CONFIG_PATH="${V2RAYA_CONFIG_PATH:-$V2RAYA_DIR/config}"
+V2RAY_AGENT_INSTALL_URL="${V2RAY_AGENT_INSTALL_URL:-https://raw.githubusercontent.com/mack-a/v2ray-agent/master/install.sh}"
 SQLSERVER_DIR="${SQLSERVER_DIR:-$SCRIPT_DIR/sqlserver}"
 SQLSERVER_IMAGE="${SQLSERVER_IMAGE:-mcr.microsoft.com/mssql/server:2022-latest}"
 SQLSERVER_CONTAINER_NAME="${SQLSERVER_CONTAINER_NAME:-sqlserver}"
@@ -1331,10 +1332,10 @@ site_management_menu() {
   while true; do
     print_header
     cat <<'MENU'
-【站点管理】
+【NPM站点反代管理】
 1. 查看 NPM 后端管理地址
 2. 安装 NPM
-3. 返回主菜单
+0. 返回主菜单
 MENU
 
     read -rp "请选择: " choice
@@ -1352,7 +1353,7 @@ MENU
         npm_install
         pause
         ;;
-      3)
+      0)
         break
         ;;
       *)
@@ -1430,218 +1431,6 @@ docker_delete_project() {
 
   rm -rf "$project_dir"
   echo "已删除：$project_dir"
-}
-
-docker_backup_menu() {
-
-docker_prepare_transfer_dir() {
-  local transfer_dir
-  transfer_dir="${TRANSFER_DIR:-$SCRIPT_DIR/transfers}"
-  mkdir -p "$transfer_dir"
-  printf '%s' "$transfer_dir"
-}
-
-request_transfer_password() {
-  local prompt_value password_value
-  prompt_value="$1"
-  read -rsp "$prompt_value" password_value
-  echo
-  if [ -z "$password_value" ]; then
-    echo "密码不能为空。"
-    return 1
-  fi
-  printf '%s' "$password_value"
-}
-
-remote_ssh_port_value() {
-  local ssh_port
-  read -rp "请输入远端 SSH 端口（默认 22）: " ssh_port
-  printf '%s' "${ssh_port:-22}"
-}
-
-# 数据迁移：先压缩本地目录，再传到远端。
-transfer_pack_source() {
-  local source_dir archive_name transfer_dir archive_path
-  read -rp "请输入要迁移的本地目录绝对路径: " source_dir
-  if [ -z "$source_dir" ]; then
-    echo "本地目录不能为空。"
-    return 1
-  fi
-
-  if [ ! -d "$source_dir" ]; then
-    echo "本地目录不存在。"
-    return 1
-  fi
-
-  transfer_dir="$(docker_prepare_transfer_dir)"
-  archive_name="$(basename "$source_dir")_$(date +%Y%m%d_%H%M%S).tar.gz"
-  archive_path="$transfer_dir/$archive_name"
-  tar -czf "$archive_path" -C "$(dirname "$source_dir")" "$(basename "$source_dir")"
-  printf '%s' "$archive_path"
-}
-
-transfer_file_to_remote() {
-  local archive_path remote_ip remote_port remote_user remote_password remote_dir ssh_port remote_target
-  archive_path="$1"
-
-  read -rp "请输入远端服务器 IP: " remote_ip
-  if [ -z "$remote_ip" ]; then
-    echo "远端 IP 不能为空。"
-    return 1
-  fi
-
-  remote_port="$(remote_ssh_port_value)"
-  read -rp "请输入远端账号: " remote_user
-  if [ -z "$remote_user" ]; then
-    echo "远端账号不能为空。"
-    return 1
-  fi
-
-  remote_password="$(request_transfer_password "请输入远端账号密码: ")" || return 1
-  read -rp "请输入远端目标目录（例如 /data/backup）: " remote_dir
-  if [ -z "$remote_dir" ]; then
-    echo "远端目录不能为空。"
-    return 1
-  fi
-
-  if ! command -v sshpass >/dev/null 2>&1; then
-    echo "未检测到 sshpass，请先安装 sshpass。"
-    return 1
-  fi
-
-  if ! command -v scp >/dev/null 2>&1; then
-    echo "未检测到 scp。"
-    return 1
-  fi
-
-  remote_target="${remote_user}@${remote_ip}:${remote_dir}/"
-  sshpass -p "$remote_password" ssh -p "$remote_port" -o StrictHostKeyChecking=no "$remote_user@$remote_ip" "mkdir -p '$remote_dir'"
-  sshpass -p "$remote_password" scp -P "$remote_port" -o StrictHostKeyChecking=no "$archive_path" "$remote_target"
-  echo "传输完成：$remote_target"
-}
-
-transfer_remote_unpack() {
-  local archive_name remote_ip remote_port remote_user remote_password remote_dir remote_base_name remote_cmd
-  read -rp "是否在远端自动解压（y/n，默认 y）: " remote_unpack
-  remote_unpack="${remote_unpack:-y}"
-  if [[ "$remote_unpack" != "y" && "$remote_unpack" != "Y" ]]; then
-    return 0
-  fi
-
-  read -rp "请输入远端服务器 IP: " remote_ip
-  if [ -z "$remote_ip" ]; then
-    echo "远端 IP 不能为空。"
-    return 1
-  fi
-
-  remote_port="$(remote_ssh_port_value)"
-  read -rp "请输入远端账号: " remote_user
-  if [ -z "$remote_user" ]; then
-    echo "远端账号不能为空。"
-    return 1
-  fi
-
-  remote_password="$(request_transfer_password "请输入远端账号密码: ")" || return 1
-  read -rp "请输入远端目标目录: " remote_dir
-  if [ -z "$remote_dir" ]; then
-    echo "远端目录不能为空。"
-    return 1
-  fi
-
-  read -rp "请输入已上传的压缩包文件名（例如 app_20260518_120000.tar.gz）: " archive_name
-  if [ -z "$archive_name" ]; then
-    echo "压缩包文件名不能为空。"
-    return 1
-  fi
-
-  remote_base_name="${archive_name%.tar.gz}"
-  remote_cmd="mkdir -p '$remote_dir/$remote_base_name' && tar -xzf '$remote_dir/$archive_name' -C '$remote_dir/$remote_base_name'"
-  sshpass -p "$remote_password" ssh -p "$remote_port" -o StrictHostKeyChecking=no "$remote_user@$remote_ip" "$remote_cmd"
-  echo "远端解压完成。"
-}
-
-data_migration_menu() {
-  while true; do
-    print_header
-    cat <<'MENU'
-【数据迁移】
-1. 打包本地目录
-2. 传输压缩包到远端
-3. 传输后远端自动解压
-4. 一步完成：打包 + 传输
-0. 返回主菜单
-MENU
-
-    read -rp "请选择: " choice
-    case "$choice" in
-      1)
-        transfer_pack_source
-        pause
-        ;;
-      2)
-        local archive_path
-        read -rp "请输入已有压缩包路径: " archive_path
-        if [ -z "$archive_path" ] || [ ! -f "$archive_path" ]; then
-          echo "压缩包不存在。"
-        else
-          transfer_file_to_remote "$archive_path"
-        fi
-        pause
-        ;;
-      3)
-        transfer_remote_unpack
-        pause
-        ;;
-      4)
-        local archive_path
-        archive_path="$(transfer_pack_source)" || { pause; continue; }
-        transfer_file_to_remote "$archive_path"
-        pause
-        ;;
-      0)
-        break
-        ;;
-      *)
-        echo "无效选择。"
-        pause
-        ;;
-    esac
-  done
-}
-
-  while true; do
-    print_header
-    cat <<'MENU'
-【Docker 项目备份 / 恢复】
-1. 备份项目目录
-2. 恢复项目目录
-3. 删除项目目录
-0. 返回主菜单
-MENU
-
-    read -rp "请选择: " choice
-    case "$choice" in
-      1)
-        docker_backup_project
-        pause
-        ;;
-      2)
-        docker_restore_project
-        pause
-        ;;
-      3)
-        docker_delete_project
-        pause
-        ;;
-      0)
-        break
-        ;;
-      *)
-        echo "无效选择。"
-        pause
-        ;;
-    esac
-  done
 }
 
 system_update() {
@@ -1780,6 +1569,12 @@ server_maintenance_menu() {
 3. Swap 虚拟内存调整
 4. 时区切换
 5. SSH 端口更改
+6. 快捷键注册 / 删除（r命令）
+7. DNS 优化
+8. 时区/语言切换
+9. Nginx Proxy Manager
+10. CodeX CLI(API)
+11. V2Ray-Agent安装脚本
 0. 返回主菜单
 MENU
 
@@ -1803,6 +1598,24 @@ MENU
       5)
         ssh_port_change
         pause
+        ;;
+      6)
+        shortcut_r_menu
+        ;;
+      7)
+        dns_optimize_menu
+        ;;
+      8)
+        timezone_language_menu
+        ;;
+      9)
+        npm_menu
+        ;;
+      10)
+        codex_cli_menu
+        ;;
+      11)
+        v2ray_agent_menu
         ;;
       0)
         break
@@ -2704,9 +2517,9 @@ v2ray_agent_install() {
 
   local tmp_script="/tmp/v2ray-agent-install.sh"
   if command -v wget >/dev/null 2>&1; then
-    wget -O "$tmp_script" "$V2RAY_AGENT_INSTALL_URL"
+    wget -O "$tmp_script" "${V2RAY_AGENT_INSTALL_URL}"
   elif command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$V2RAY_AGENT_INSTALL_URL" -o "$tmp_script"
+    curl -fsSL "${V2RAY_AGENT_INSTALL_URL}" -o "$tmp_script"
   else
     echo "未检测到 wget/curl，无法下载 V2Ray-Agent 安装脚本。"
     return 1
@@ -2716,13 +2529,40 @@ v2ray_agent_install() {
   bash "$tmp_script"
 }
 
+v2ray_agent_uninstall() {
+  if ! require_docker; then
+    return 0
+  fi
+
+  if ! command -v git >/dev/null 2>&1; then
+    echo "未检测到 git，请先安装 git。"
+    return 1
+  fi
+
+  local tmp_script="/tmp/v2ray-agent-install.sh"
+  if command -v wget >/dev/null 2>&1; then
+    wget -O "$tmp_script" "${V2RAY_AGENT_INSTALL_URL}"
+  elif command -v curl >/dev/null 2>&1; then
+    curl -fsSL "${V2RAY_AGENT_INSTALL_URL}" -o "$tmp_script"
+  else
+    echo "未检测到 wget/curl，无法下载 V2Ray-Agent 安装脚本。"
+    return 1
+  fi
+
+  chmod 700 "$tmp_script"
+  printf '20
+y
+' | bash "$tmp_script"
+}
+
 v2ray_agent_menu() {
   while true; do
     print_header
     cat <<'MENU'
 【V2Ray-Agent 安装脚本】
 1. 下载并执行 V2Ray-Agent 安装脚本
-2. 查看安装脚本地址
+2. 卸载 V2Ray-Agent
+3. 查看安装脚本地址
 0. 返回主菜单
 MENU
 
@@ -2733,7 +2573,11 @@ MENU
         pause
         ;;
       2)
-        echo "安装脚本地址：$V2RAY_AGENT_INSTALL_URL"
+        v2ray_agent_uninstall
+        pause
+        ;;
+      3)
+        echo "安装脚本地址：${V2RAY_AGENT_INSTALL_URL}"
         pause
         ;;
       0)
@@ -2954,35 +2798,16 @@ MENU
     esac
   done
 }
-future_modules_menu() {
-  print_header
-  cat <<'EOF_FUTURE'
-后续模块规划：
-1. 更完整的 Docker 项目迁移与批量管理
-2. 更细的系统维护能力
-3. 其他定制能力
-EOF_FUTURE
-  pause
-}
-
 main_menu() {
   while true; do
     print_header
     cat <<'MENU'
 【主菜单】
 1. Docker 基础管理
-2. Nginx Proxy Manager
-3. 站点管理
-4. Docker 项目备份 / 恢复 / 删除
-5. 数据迁移
-6. 网站防护 / 安全
-7. 服务器基础维护
-8. 快捷键注册 / 删除（r命令）
-9. DNS 优化
-10. 时区/语言切换
-11. CodeX CLI(API)
-12. V2Ray-Agent安装脚本
-13. 后续模块规划
+2. NPM站点反代管理
+3. 数据迁移
+4. 网站防护 / 安全
+5. 服务器基础维护
 0. 退出
 MENU
 
@@ -2992,40 +2817,16 @@ MENU
         docker_menu
         ;;
       2)
-        npm_menu
-        ;;
-      3)
         site_management_menu
         ;;
-      4)
-        docker_backup_menu
-        ;;
-      5)
+      3)
         data_migration_menu
         ;;
-      6)
+      4)
         security_menu
         ;;
-      7)
+      5)
         server_maintenance_menu
-        ;;
-      8)
-        shortcut_r_menu
-        ;;
-      9)
-        dns_optimize_menu
-        ;;
-      10)
-        timezone_language_menu
-        ;;
-      11)
-        codex_cli_menu
-        ;;
-      12)
-        v2ray_agent_menu
-        ;;
-      13)
-        future_modules_menu
         ;;
       0)
         echo "已退出。"
