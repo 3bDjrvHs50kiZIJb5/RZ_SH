@@ -2889,6 +2889,43 @@ MENU
     esac
   done
 }
+
+data_migration_menu() {
+  while true; do
+    print_header
+    cat <<'MENU'
+【数据迁移】
+1. 备份 Docker 项目目录
+2. 从备份恢复项目
+3. 删除项目目录
+0. 返回主菜单
+MENU
+
+    read -rp "请选择: " choice
+    case "$choice" in
+      1)
+        docker_backup_project
+        pause
+        ;;
+      2)
+        docker_restore_project
+        pause
+        ;;
+      3)
+        docker_delete_project
+        pause
+        ;;
+      0)
+        break
+        ;;
+      *)
+        echo "无效选择。"
+        pause
+        ;;
+    esac
+  done
+}
+
 main_menu() {
   while true; do
     print_header
