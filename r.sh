@@ -1,67 +1,3 @@
-#!/usr/bin/env bash
-
-set -euo pipefail
-
-R_SH_RAW_URL="${R_SH_RAW_URL:-https://raw.githubusercontent.com/3bDjrvHs50kiZIJb5/RZ_SH/main/r.sh}"
-
-# 数据目录默认：当前工作目录（可用 export R_SH_HOME=... 覆盖）
-r_sh_default_home() {
-  if [ -n "${R_SH_HOME:-}" ]; then
-    printf '%s' "$R_SH_HOME"
-    return 0
-  fi
-  (cd "${PWD:-.}" && pwd)
-}
-
-# curl 管道执行时（bash <(curl ...)）脚本在 /dev/fd/*，自动落盘到当前目录后重新执行
-bootstrap_from_fd_if_needed() {
-  local src="${BASH_SOURCE[0]}"
-
-  if [ -n "${R_SH_BOOTSTRAPPED:-}" ]; then
-    return 0
-  fi
-  if [ -n "${R_SH_SCRIPT:-}" ] && [ -f "${R_SH_SCRIPT}" ]; then
-    return 0
-  fi
-
-  case "$src" in
-    /dev/fd/*|/dev/fd|/proc/self/fd|/proc/self/fd/*|/proc/*/fd/*) ;;
-    *) return 0 ;;
-  esac
-
-  local home
-  home="$(r_sh_default_home)"
-  local dest="$home/r.sh"
-
-  if ! mkdir -p "$home" 2>/dev/null || [ ! -w "$home" ]; then
-    echo "错误: 当前目录不可写: $home" >&2
-    echo "请先 cd 到可写目录，或设置: export R_SH_HOME=/path/to/dir" >&2
-    exit 1
-  fi
-
-  if ! cp -f "$src" "$dest" 2>/dev/null; then
-    if command -v curl >/dev/null 2>&1; then
-      if ! curl -fsSL "$R_SH_RAW_URL" -o "$dest"; then
-        echo "错误: 无法下载 r.sh 到 $dest" >&2
-        exit 1
-      fi
-    else
-      echo "错误: 无法从管道复制脚本，且未安装 curl" >&2
-      exit 1
-    fi
-  fi
-
-  chmod +x "$dest" 2>/dev/null || true
-  export R_SH_HOME="$home"
-  export R_SH_SCRIPT="$dest"
-  export R_SH_BOOTSTRAPPED=1
-  echo "已将 r.sh 安装到当前目录: $dest"
-  echo "数据目录: $home"
-  echo "下次可直接运行: bash $dest"
-  exec bash "$dest" "$@"
-}
-
-bootstrap_from_fd_if_needed
 
 # 解析数据根目录 SCRIPT_DIR：优先 R_SH_HOME，其次 r.sh 所在目录，管道安装时用 pwd
 # 所有 Compose / 备份 / 配置均建在 SCRIPT_DIR 下
@@ -185,6 +121,10 @@ CLI_PROXY_CONFIG_PATH="${CLI_PROXY_CONFIG_PATH:-$CLI_PROXY_DIR/config.yaml}"
 CLI_PROXY_AUTH_PATH="${CLI_PROXY_AUTH_PATH:-$CLI_PROXY_DIR/auths}"
 CLI_PROXY_LOG_PATH="${CLI_PROXY_LOG_PATH:-$CLI_PROXY_DIR/logs}"
 CLI_PROXY_PORTS="${CLI_PROXY_PORTS:-8317 8085 1455 54545 51121 11451}"
+CLI_PROXY_PORT="${CLI_PROXY_PORT:-8317}"
+CLI_PROXY_API_KEY="${CLI_PROXY_API_KEY:-change-me-to-your-api-key}"
+CLI_PROXY_DEBUG="${CLI_PROXY_DEBUG:-false}"
+CLI_PROXY_PROXY_URL="${CLI_PROXY_PROXY_URL:-}"
 V2RAYA_DIR="${V2RAYA_DIR:-$SCRIPT_DIR/v2raya}"
 V2RAYA_IMAGE="${V2RAYA_IMAGE:-mzz2017/v2raya:v2.2.6.4}"
 V2RAYA_CONTAINER_NAME="${V2RAYA_CONTAINER_NAME:-v2raya}"
@@ -669,13 +609,28 @@ cli_proxy_port_list() {
   printf '%s' "$CLI_PROXY_PORTS"
 }
 
+# 首次安装时写入默认 config.yaml（已存在且非空则保留用户配置）。
+cli_proxy_write_config() {
+  ensure_dir "$CLI_PROXY_DIR" || return 1
+  if [ -f "$CLI_PROXY_CONFIG_PATH" ] && [ -s "$CLI_PROXY_CONFIG_PATH" ]; then
+    return 0
+  fi
+
+  cat > "$CLI_PROXY_CONFIG_PATH" <<EOF
+port: ${CLI_PROXY_PORT}
+auth-dir: "~/.cli-proxy-api"
+debug: ${CLI_PROXY_DEBUG}
+proxy-url: "${CLI_PROXY_PROXY_URL}"
+api-keys:
+  - "${CLI_PROXY_API_KEY}"
+EOF
+}
+
 cli_proxy_write_compose() {
   local config_path auth_path log_path
 
   ensure_dir "$CLI_PROXY_DIR" "$CLI_PROXY_AUTH_PATH" "$CLI_PROXY_LOG_PATH" || return 1
-  if [ ! -f "$CLI_PROXY_CONFIG_PATH" ]; then
-    touch "$CLI_PROXY_CONFIG_PATH"
-  fi
+  cli_proxy_write_config || return 1
 
   config_path="$(abs_path "$CLI_PROXY_CONFIG_PATH")" || return 1
   auth_path="$(abs_path "$CLI_PROXY_AUTH_PATH")" || return 1
@@ -791,6 +746,10 @@ MENU
         echo "认证目录：$CLI_PROXY_AUTH_PATH"
         echo "日志目录：$CLI_PROXY_LOG_PATH"
         echo "端口：$(cli_proxy_port_list)"
+        echo "API 端口：$CLI_PROXY_PORT"
+        echo "API Key：$CLI_PROXY_API_KEY"
+        echo "Debug：$CLI_PROXY_DEBUG"
+        echo "代理 URL：${CLI_PROXY_PROXY_URL:-（未设置）}"
         pause
         ;;
       0)
