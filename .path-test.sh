@@ -94,7 +94,6 @@ V2RAYA_IMAGE="${V2RAYA_IMAGE:-mzz2017/v2raya:v2.2.6.4}"
 V2RAYA_CONTAINER_NAME="${V2RAYA_CONTAINER_NAME:-v2raya}"
 V2RAYA_PORT="${V2RAYA_PORT:-2017}"
 V2RAYA_CONFIG_PATH="${V2RAYA_CONFIG_PATH:-$V2RAYA_DIR/config}"
-V2RAY_AGENT_INSTALL_URL="${V2RAY_AGENT_INSTALL_URL:-https://raw.githubusercontent.com/mack-a/v2ray-agent/master/install.sh}"
 SQLSERVER_DIR="${SQLSERVER_DIR:-$SCRIPT_DIR/sqlserver}"
 SQLSERVER_IMAGE="${SQLSERVER_IMAGE:-mcr.microsoft.com/mssql/server:2022-latest}"
 SQLSERVER_CONTAINER_NAME="${SQLSERVER_CONTAINER_NAME:-sqlserver}"
@@ -126,14 +125,6 @@ SEND_EMAIL_SMTP_HOST="${SEND_EMAIL_SMTP_HOST:-smtp.example.com}"
 SEND_EMAIL_SMTP_PORT="${SEND_EMAIL_SMTP_PORT:-587}"
 SEND_EMAIL_SMTP_USER="${SEND_EMAIL_SMTP_USER:-user@example.com}"
 SEND_EMAIL_SMTP_PASS="${SEND_EMAIL_SMTP_PASS:-password}"
-
-CODEX_MODEL_PROVIDER="${CODEX_MODEL_PROVIDER:-token}"
-CODEX_BASE_URL="${CODEX_BASE_URL:-https://token.renzhe.org/v1}"
-CODEX_MODEL="${CODEX_MODEL:-gpt-5.4-mini}"
-CODEX_REASONING="${CODEX_REASONING:-medium}"
-CODEX_DIR="${CODEX_DIR:-$HOME/.codex}"
-CODEX_CONFIG_FILE="${CODEX_CONFIG_FILE:-$CODEX_DIR/config.toml}"
-CODEX_AUTH_FILE="${CODEX_AUTH_FILE:-$CODEX_DIR/auth.json}"
 
 pause() {
   printf "\n按回车继续..."
@@ -270,14 +261,6 @@ docker_list_containers() {
   docker ps -a --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
 }
 
-docker_list_images() {
-  if ! require_docker; then
-    return 0
-  fi
-
-  docker images --format 'table {{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.Size}}'
-}
-
 docker_prompt_container_name() {
   local container_name
   read -rp "请输入容器名: " container_name
@@ -372,11 +355,6 @@ docker_create_container() {
 docker_menu() {
   while true; do
     print_header
-    echo "【Docker 概览：全部容器】"
-    docker_list_containers
-    printf "\n【Docker 概览：全部镜像】\n"
-    docker_list_images
-    printf "\n"
     cat <<'MENU'
 【Docker 基础管理】
 1. 查看容器列表
@@ -384,13 +362,13 @@ docker_menu() {
 3. 停止容器
 4. 重启容器
 5. 删除容器
---------------------
-6. CLIProxyAPI（Docker Compose）
-7. V2RayA代理管理面板（Docker Compose）
-8. SQL Server数据库服务（Docker Compose）
-9. Nginx静态应用站（Docker Compose）
-10. UptimeNode监控面板（Docker Compose）
-11. SendEmail邮件服务（Docker Compose）
+6. 创建容器
+7. CLIProxyAPI（Docker Compose）
+8. V2RayA代理管理面板（Docker Compose）
+9. SQL Server数据库服务（Docker Compose）
+10. Nginx静态应用站（Docker Compose）
+11. UptimeNode 监控（Docker Compose）
+12. SendEmail 邮件服务（Docker Compose）
 0. 返回主菜单
 MENU
 
@@ -417,67 +395,25 @@ MENU
         pause
         ;;
       6)
-        cli_proxy_menu
-        ;;
-      7)
-        v2raya_menu
-        ;;
-      8)
-        sqlserver_menu
-        ;;
-      9)
-        nginx_static_menu
-        ;;
-      10)
-        uptimenode_menu
-        ;;
-      11)
-        sendemail_menu
-        ;;
-      0)
-        break
-        ;;
-      *)
-        echo "无效选择。"
+        docker_create_container
         pause
         ;;
-    esac
-  done
-}
-
-docker_compose_menu() {
-  while true; do
-    print_header
-    cat <<'MENU'
-【Docker Compose 服务】
---------------------
-1. CLIProxyAPI（Docker Compose）
-2. V2RayA代理管理面板（Docker Compose）
-3. SQL Server数据库服务（Docker Compose）
-4. Nginx静态应用站（Docker Compose）
-5. UptimeNode监控面板（Docker Compose）
-6. SendEmail邮件服务（Docker Compose）
-0. 返回上级菜单
-MENU
-
-    read -rp "请选择: " choice
-    case "$choice" in
-      1)
+      7)
         cli_proxy_menu
         ;;
-      2)
+      8)
         v2raya_menu
         ;;
-      3)
+      9)
         sqlserver_menu
         ;;
-      4)
+      10)
         nginx_static_menu
         ;;
-      5)
+      11)
         uptimenode_menu
         ;;
-      6)
+      12)
         sendemail_menu
         ;;
       0)
@@ -962,16 +898,14 @@ MENU
   done
 }
 
-# Nginx 静态站点：按域名生成独立目录和 compose，容器名与域名保持一致。
+# Nginx 静态站点：按域名生成独立目录和 compose。
 nginx_static_prepare_site() {
-  local domain_name container_name safe_name site_dir index_file host_port
-  read -rp "请输入域名（同时作为容器名）: " domain_name
+  local domain_name safe_name site_dir index_file host_port
+  read -rp "请输入域名（作为容器名）: " domain_name
   if [ -z "$domain_name" ]; then
     echo "域名不能为空。"
     return 1
   fi
-
-  container_name="$domain_name"
 
   read -rp "请输入对外端口（默认 80）: " host_port
   host_port="${host_port:-80}"
@@ -1003,7 +937,7 @@ EOF_INDEX
 services:
   nginx-static:
     image: ${NGINX_STATIC_IMAGE}
-    container_name: ${container_name}
+    container_name: ${domain_name}
     restart: unless-stopped
     ports:
       - "${host_port}:80"
@@ -1246,23 +1180,6 @@ EMAIL_TO=$SEND_EMAIL_TO
 EOF
 }
 
-sendemail_compose_file() {
-  local compose_file
-  for compose_file in \
-    "$SEND_EMAIL_DIR/docker-compose.yml" \
-    "$SEND_EMAIL_DIR/docker-compose.yaml" \
-    "$SEND_EMAIL_DIR/compose.yml" \
-    "$SEND_EMAIL_DIR/compose.yaml"
-  do
-    if [ -f "$compose_file" ]; then
-      printf '%s' "$compose_file"
-      return 0
-    fi
-  done
-
-  return 1
-}
-
 sendemail_install() {
   if ! require_docker; then
     return 0
@@ -1274,19 +1191,16 @@ sendemail_install() {
   fi
 
   sendemail_clone_repo
-  if [ -f "$SEND_EMAIL_DIR/.env" ]; then
-    echo "已发现本地 .env，跳过写入。"
-  elif [ -f "$SEND_EMAIL_DIR/.env.example" ]; then
+  if [ -f "$SEND_EMAIL_DIR/.env.example" ] && [ ! -f "$SEND_EMAIL_DIR/.env" ]; then
     cp "$SEND_EMAIL_DIR/.env.example" "$SEND_EMAIL_DIR/.env"
-  else
-    sendemail_write_env
   fi
-  local compose_file
-  compose_file="$(sendemail_compose_file)" || {
-    echo "仓库中未找到 docker-compose.yml / docker-compose.yaml / compose.yml / compose.yaml，请先检查仓库内容。"
+  sendemail_write_env
+  if [ -f "$SEND_EMAIL_DIR/docker-compose.yml" ]; then
+    (cd "$SEND_EMAIL_DIR" && docker compose up -d --build)
+  else
+    echo "仓库中未找到 docker-compose.yml，请先检查仓库内容。"
     return 1
-  }
-  (cd "$SEND_EMAIL_DIR" && docker compose -f "$compose_file" up -d --build)
+  fi
   echo "SendEmail 已启动。"
 }
 
@@ -1300,13 +1214,7 @@ sendemail_start() {
     return 1
   fi
 
-  local compose_file
-  compose_file="$(sendemail_compose_file)" || {
-    echo "未找到 SendEmail 的 compose 文件。"
-    return 1
-  }
-
-  (cd "$SEND_EMAIL_DIR" && docker compose -f "$compose_file" up -d)
+  (cd "$SEND_EMAIL_DIR" && docker compose up -d)
 }
 
 sendemail_stop() {
@@ -1319,13 +1227,7 @@ sendemail_stop() {
     return 1
   fi
 
-  local compose_file
-  compose_file="$(sendemail_compose_file)" || {
-    echo "未找到 SendEmail 的 compose 文件。"
-    return 1
-  }
-
-  (cd "$SEND_EMAIL_DIR" && docker compose -f "$compose_file" down)
+  (cd "$SEND_EMAIL_DIR" && docker compose down)
 }
 
 sendemail_menu() {
@@ -1423,10 +1325,10 @@ site_management_menu() {
   while true; do
     print_header
     cat <<'MENU'
-【NPM站点反代管理】
+【站点管理】
 1. 查看 NPM 后端管理地址
 2. 安装 NPM
-0. 返回主菜单
+3. 返回主菜单
 MENU
 
     read -rp "请选择: " choice
@@ -1444,7 +1346,7 @@ MENU
         npm_install
         pause
         ;;
-      0)
+      3)
         break
         ;;
       *)
@@ -1522,6 +1424,218 @@ docker_delete_project() {
 
   rm -rf "$project_dir"
   echo "已删除：$project_dir"
+}
+
+docker_backup_menu() {
+
+docker_prepare_transfer_dir() {
+  local transfer_dir
+  transfer_dir="${TRANSFER_DIR:-$SCRIPT_DIR/transfers}"
+  mkdir -p "$transfer_dir"
+  printf '%s' "$transfer_dir"
+}
+
+request_transfer_password() {
+  local prompt_value password_value
+  prompt_value="$1"
+  read -rsp "$prompt_value" password_value
+  echo
+  if [ -z "$password_value" ]; then
+    echo "密码不能为空。"
+    return 1
+  fi
+  printf '%s' "$password_value"
+}
+
+remote_ssh_port_value() {
+  local ssh_port
+  read -rp "请输入远端 SSH 端口（默认 22）: " ssh_port
+  printf '%s' "${ssh_port:-22}"
+}
+
+# 数据迁移：先压缩本地目录，再传到远端。
+transfer_pack_source() {
+  local source_dir archive_name transfer_dir archive_path
+  read -rp "请输入要迁移的本地目录绝对路径: " source_dir
+  if [ -z "$source_dir" ]; then
+    echo "本地目录不能为空。"
+    return 1
+  fi
+
+  if [ ! -d "$source_dir" ]; then
+    echo "本地目录不存在。"
+    return 1
+  fi
+
+  transfer_dir="$(docker_prepare_transfer_dir)"
+  archive_name="$(basename "$source_dir")_$(date +%Y%m%d_%H%M%S).tar.gz"
+  archive_path="$transfer_dir/$archive_name"
+  tar -czf "$archive_path" -C "$(dirname "$source_dir")" "$(basename "$source_dir")"
+  printf '%s' "$archive_path"
+}
+
+transfer_file_to_remote() {
+  local archive_path remote_ip remote_port remote_user remote_password remote_dir ssh_port remote_target
+  archive_path="$1"
+
+  read -rp "请输入远端服务器 IP: " remote_ip
+  if [ -z "$remote_ip" ]; then
+    echo "远端 IP 不能为空。"
+    return 1
+  fi
+
+  remote_port="$(remote_ssh_port_value)"
+  read -rp "请输入远端账号: " remote_user
+  if [ -z "$remote_user" ]; then
+    echo "远端账号不能为空。"
+    return 1
+  fi
+
+  remote_password="$(request_transfer_password "请输入远端账号密码: ")" || return 1
+  read -rp "请输入远端目标目录（例如 /data/backup）: " remote_dir
+  if [ -z "$remote_dir" ]; then
+    echo "远端目录不能为空。"
+    return 1
+  fi
+
+  if ! command -v sshpass >/dev/null 2>&1; then
+    echo "未检测到 sshpass，请先安装 sshpass。"
+    return 1
+  fi
+
+  if ! command -v scp >/dev/null 2>&1; then
+    echo "未检测到 scp。"
+    return 1
+  fi
+
+  remote_target="${remote_user}@${remote_ip}:${remote_dir}/"
+  sshpass -p "$remote_password" ssh -p "$remote_port" -o StrictHostKeyChecking=no "$remote_user@$remote_ip" "mkdir -p '$remote_dir'"
+  sshpass -p "$remote_password" scp -P "$remote_port" -o StrictHostKeyChecking=no "$archive_path" "$remote_target"
+  echo "传输完成：$remote_target"
+}
+
+transfer_remote_unpack() {
+  local archive_name remote_ip remote_port remote_user remote_password remote_dir remote_base_name remote_cmd
+  read -rp "是否在远端自动解压（y/n，默认 y）: " remote_unpack
+  remote_unpack="${remote_unpack:-y}"
+  if [[ "$remote_unpack" != "y" && "$remote_unpack" != "Y" ]]; then
+    return 0
+  fi
+
+  read -rp "请输入远端服务器 IP: " remote_ip
+  if [ -z "$remote_ip" ]; then
+    echo "远端 IP 不能为空。"
+    return 1
+  fi
+
+  remote_port="$(remote_ssh_port_value)"
+  read -rp "请输入远端账号: " remote_user
+  if [ -z "$remote_user" ]; then
+    echo "远端账号不能为空。"
+    return 1
+  fi
+
+  remote_password="$(request_transfer_password "请输入远端账号密码: ")" || return 1
+  read -rp "请输入远端目标目录: " remote_dir
+  if [ -z "$remote_dir" ]; then
+    echo "远端目录不能为空。"
+    return 1
+  fi
+
+  read -rp "请输入已上传的压缩包文件名（例如 app_20260518_120000.tar.gz）: " archive_name
+  if [ -z "$archive_name" ]; then
+    echo "压缩包文件名不能为空。"
+    return 1
+  fi
+
+  remote_base_name="${archive_name%.tar.gz}"
+  remote_cmd="mkdir -p '$remote_dir/$remote_base_name' && tar -xzf '$remote_dir/$archive_name' -C '$remote_dir/$remote_base_name'"
+  sshpass -p "$remote_password" ssh -p "$remote_port" -o StrictHostKeyChecking=no "$remote_user@$remote_ip" "$remote_cmd"
+  echo "远端解压完成。"
+}
+
+data_migration_menu() {
+  while true; do
+    print_header
+    cat <<'MENU'
+【数据迁移】
+1. 打包本地目录
+2. 传输压缩包到远端
+3. 传输后远端自动解压
+4. 一步完成：打包 + 传输
+0. 返回主菜单
+MENU
+
+    read -rp "请选择: " choice
+    case "$choice" in
+      1)
+        transfer_pack_source
+        pause
+        ;;
+      2)
+        local archive_path
+        read -rp "请输入已有压缩包路径: " archive_path
+        if [ -z "$archive_path" ] || [ ! -f "$archive_path" ]; then
+          echo "压缩包不存在。"
+        else
+          transfer_file_to_remote "$archive_path"
+        fi
+        pause
+        ;;
+      3)
+        transfer_remote_unpack
+        pause
+        ;;
+      4)
+        local archive_path
+        archive_path="$(transfer_pack_source)" || { pause; continue; }
+        transfer_file_to_remote "$archive_path"
+        pause
+        ;;
+      0)
+        break
+        ;;
+      *)
+        echo "无效选择。"
+        pause
+        ;;
+    esac
+  done
+}
+
+  while true; do
+    print_header
+    cat <<'MENU'
+【Docker 项目备份 / 恢复】
+1. 备份项目目录
+2. 恢复项目目录
+3. 删除项目目录
+0. 返回主菜单
+MENU
+
+    read -rp "请选择: " choice
+    case "$choice" in
+      1)
+        docker_backup_project
+        pause
+        ;;
+      2)
+        docker_restore_project
+        pause
+        ;;
+      3)
+        docker_delete_project
+        pause
+        ;;
+      0)
+        break
+        ;;
+      *)
+        echo "无效选择。"
+        pause
+        ;;
+    esac
+  done
 }
 
 system_update() {
@@ -1660,12 +1774,6 @@ server_maintenance_menu() {
 3. Swap 虚拟内存调整
 4. 时区切换
 5. SSH 端口更改
-6. 快捷键注册 / 删除（r命令）
-7. DNS 优化
-8. 时区/语言切换
-9. Nginx Proxy Manager
-10. CodeX CLI(API)
-11. V2Ray-Agent安装脚本
 0. 返回主菜单
 MENU
 
@@ -1689,24 +1797,6 @@ MENU
       5)
         ssh_port_change
         pause
-        ;;
-      6)
-        shortcut_r_menu
-        ;;
-      7)
-        dns_optimize_menu
-        ;;
-      8)
-        timezone_language_menu
-        ;;
-      9)
-        npm_menu
-        ;;
-      10)
-        codex_cli_menu
-        ;;
-      11)
-        v2ray_agent_menu
         ;;
       0)
         break
@@ -2528,7 +2618,8 @@ codex_cli_config_api_mode() {
   input_model="${input_model:-$CODEX_MODEL}"
   read -rp "推理强度（low/medium/high）[${CODEX_REASONING}]: " input_reasoning
   input_reasoning="${input_reasoning:-$CODEX_REASONING}"
-  read -rp "OpenAI API Key（可选，回车跳过）: " input_api_key
+  read -rsp "OpenAI API Key（可选，回车跳过）: " input_api_key
+  echo
 
   CODEX_MODEL_PROVIDER="$input_model_provider"
   CODEX_BASE_URL="$input_base_url"
@@ -2548,7 +2639,7 @@ codex_cli_config_api_mode() {
 codex_cli_launch() {
   if command -v codex >/dev/null 2>&1; then
     echo "启动 Codex CLI..."
-    CODEX_HOME="$CODEX_DIR" codex
+    codex
   else
     echo "未找到 codex，请先执行安装/升级。"
   fi
@@ -2608,9 +2699,9 @@ v2ray_agent_install() {
 
   local tmp_script="/tmp/v2ray-agent-install.sh"
   if command -v wget >/dev/null 2>&1; then
-    wget -O "$tmp_script" "${V2RAY_AGENT_INSTALL_URL}"
+    wget -O "$tmp_script" "$V2RAY_AGENT_INSTALL_URL"
   elif command -v curl >/dev/null 2>&1; then
-    curl -fsSL "${V2RAY_AGENT_INSTALL_URL}" -o "$tmp_script"
+    curl -fsSL "$V2RAY_AGENT_INSTALL_URL" -o "$tmp_script"
   else
     echo "未检测到 wget/curl，无法下载 V2Ray-Agent 安装脚本。"
     return 1
@@ -2620,40 +2711,13 @@ v2ray_agent_install() {
   bash "$tmp_script"
 }
 
-v2ray_agent_uninstall() {
-  if ! require_docker; then
-    return 0
-  fi
-
-  if ! command -v git >/dev/null 2>&1; then
-    echo "未检测到 git，请先安装 git。"
-    return 1
-  fi
-
-  local tmp_script="/tmp/v2ray-agent-install.sh"
-  if command -v wget >/dev/null 2>&1; then
-    wget -O "$tmp_script" "${V2RAY_AGENT_INSTALL_URL}"
-  elif command -v curl >/dev/null 2>&1; then
-    curl -fsSL "${V2RAY_AGENT_INSTALL_URL}" -o "$tmp_script"
-  else
-    echo "未检测到 wget/curl，无法下载 V2Ray-Agent 安装脚本。"
-    return 1
-  fi
-
-  chmod 700 "$tmp_script"
-  printf '20
-y
-' | bash "$tmp_script"
-}
-
 v2ray_agent_menu() {
   while true; do
     print_header
     cat <<'MENU'
 【V2Ray-Agent 安装脚本】
 1. 下载并执行 V2Ray-Agent 安装脚本
-2. 卸载 V2Ray-Agent
-3. 查看安装脚本地址
+2. 查看安装脚本地址
 0. 返回主菜单
 MENU
 
@@ -2664,11 +2728,7 @@ MENU
         pause
         ;;
       2)
-        v2ray_agent_uninstall
-        pause
-        ;;
-      3)
-        echo "安装脚本地址：${V2RAY_AGENT_INSTALL_URL}"
+        echo "安装脚本地址：$V2RAY_AGENT_INSTALL_URL"
         pause
         ;;
       0)
@@ -2889,16 +2949,35 @@ MENU
     esac
   done
 }
+future_modules_menu() {
+  print_header
+  cat <<'EOF_FUTURE'
+后续模块规划：
+1. 更完整的 Docker 项目迁移与批量管理
+2. 更细的系统维护能力
+3. 其他定制能力
+EOF_FUTURE
+  pause
+}
+
 main_menu() {
   while true; do
     print_header
     cat <<'MENU'
 【主菜单】
 1. Docker 基础管理
-2. NPM站点反代管理
-3. 数据迁移
-4. 网站防护 / 安全
-5. 服务器基础维护
+2. Nginx Proxy Manager
+3. 站点管理
+4. Docker 项目备份 / 恢复 / 删除
+5. 数据迁移
+6. 网站防护 / 安全
+7. 服务器基础维护
+8. 快捷键注册 / 删除（r命令）
+9. DNS 优化
+10. 时区/语言切换
+11. CodeX CLI(API)
+12. V2Ray-Agent安装脚本
+13. 后续模块规划
 0. 退出
 MENU
 
@@ -2908,16 +2987,40 @@ MENU
         docker_menu
         ;;
       2)
-        site_management_menu
+        npm_menu
         ;;
       3)
-        data_migration_menu
+        site_management_menu
         ;;
       4)
-        security_menu
+        docker_backup_menu
         ;;
       5)
+        data_migration_menu
+        ;;
+      6)
+        security_menu
+        ;;
+      7)
         server_maintenance_menu
+        ;;
+      8)
+        shortcut_r_menu
+        ;;
+      9)
+        dns_optimize_menu
+        ;;
+      10)
+        timezone_language_menu
+        ;;
+      11)
+        codex_cli_menu
+        ;;
+      12)
+        v2ray_agent_menu
+        ;;
+      13)
+        future_modules_menu
         ;;
       0)
         echo "已退出。"
