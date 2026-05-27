@@ -1,14 +1,17 @@
 # R_SH
 
-Linux 服务器运维脚本，通过交互式菜单完成 Docker 部署、反向代理、备份迁移、安全加固和系统维护。数据目录默认建在 `r.sh` 同级。
+Linux 服务器运维脚本，通过交互式菜单完成 Docker 部署、反向代理、备份迁移、安全加固和系统维护。所有 Docker 数据、备份、配置均以**当前数据目录**为根（一键安装时即 `cd` 后的目录；脚本启动后会自动 `cd` 到该目录）。
 
 ## 一键安装
 
+先 `cd` 到要存放数据和脚本的目录，再执行（脚本会落盘为当前目录下的 `r.sh`）：
+
 ```bash
+cd /你的目录
 bash <(curl -fsSL https://raw.githubusercontent.com/3bDjrvHs50kiZIJb5/RZ_SH/main/r.sh)
 ```
 
-本地运行：`bash /path/to/R_SH/r.sh`
+本地运行：`bash /path/to/R_SH/r.sh`（也可 `export R_SH_HOME=/path` 指定数据目录）
 
 ## 主菜单
 

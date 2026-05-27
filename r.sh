@@ -2,11 +2,81 @@
 
 set -euo pipefail
 
-# 解析 r.sh 所在目录；Docker Compose 数据目录均建在 SCRIPT_DIR 下（与脚本同级）
-# 管道/curl 执行失败时可设置: export R_SH_SCRIPT=/path/to/r.sh
+R_SH_RAW_URL="${R_SH_RAW_URL:-https://raw.githubusercontent.com/3bDjrvHs50kiZIJb5/RZ_SH/main/r.sh}"
+
+# 数据目录默认：当前工作目录（可用 export R_SH_HOME=... 覆盖）
+r_sh_default_home() {
+  if [ -n "${R_SH_HOME:-}" ]; then
+    printf '%s' "$R_SH_HOME"
+    return 0
+  fi
+  (cd "${PWD:-.}" && pwd)
+}
+
+# curl 管道执行时（bash <(curl ...)）脚本在 /dev/fd/*，自动落盘到当前目录后重新执行
+bootstrap_from_fd_if_needed() {
+  local src="${BASH_SOURCE[0]}"
+
+  if [ -n "${R_SH_BOOTSTRAPPED:-}" ]; then
+    return 0
+  fi
+  if [ -n "${R_SH_SCRIPT:-}" ] && [ -f "${R_SH_SCRIPT}" ]; then
+    return 0
+  fi
+
+  case "$src" in
+    /dev/fd/*|/dev/fd|/proc/self/fd|/proc/self/fd/*|/proc/*/fd/*) ;;
+    *) return 0 ;;
+  esac
+
+  local home
+  home="$(r_sh_default_home)"
+  local dest="$home/r.sh"
+
+  if ! mkdir -p "$home" 2>/dev/null || [ ! -w "$home" ]; then
+    echo "错误: 当前目录不可写: $home" >&2
+    echo "请先 cd 到可写目录，或设置: export R_SH_HOME=/path/to/dir" >&2
+    exit 1
+  fi
+
+  if ! cp -f "$src" "$dest" 2>/dev/null; then
+    if command -v curl >/dev/null 2>&1; then
+      if ! curl -fsSL "$R_SH_RAW_URL" -o "$dest"; then
+        echo "错误: 无法下载 r.sh 到 $dest" >&2
+        exit 1
+      fi
+    else
+      echo "错误: 无法从管道复制脚本，且未安装 curl" >&2
+      exit 1
+    fi
+  fi
+
+  chmod +x "$dest" 2>/dev/null || true
+  export R_SH_HOME="$home"
+  export R_SH_SCRIPT="$dest"
+  export R_SH_BOOTSTRAPPED=1
+  echo "已将 r.sh 安装到当前目录: $dest"
+  echo "数据目录: $home"
+  echo "下次可直接运行: bash $dest"
+  exec bash "$dest" "$@"
+}
+
+bootstrap_from_fd_if_needed
+
+# 解析数据根目录 SCRIPT_DIR：优先 R_SH_HOME，其次 r.sh 所在目录，管道安装时用 pwd
+# 所有 Compose / 备份 / 配置均建在 SCRIPT_DIR 下
 resolve_script_dir() {
   local src="${BASH_SOURCE[0]}"
   local dir=""
+
+  if [ -n "${R_SH_HOME:-}" ] && [ -d "$R_SH_HOME" ]; then
+    dir="$(cd "$R_SH_HOME" && pwd)" 2>/dev/null || dir="$R_SH_HOME"
+  fi
+
+  if [ -n "$dir" ]; then
+    printf '%s' "$dir"
+    return 0
+  fi
 
   if [ -n "${R_SH_SCRIPT:-}" ] && [ -f "$R_SH_SCRIPT" ]; then
     src="$R_SH_SCRIPT"
@@ -32,12 +102,17 @@ resolve_script_dir() {
 
   case "$dir" in
     ""|/dev/fd|/dev/fd/*|/proc/self/fd|/proc/self/fd/*)
-      if [ -n "${R_SH_HOME:-}" ]; then
-        dir="$R_SH_HOME"
-      else
+      if [ -n "${R_SH_SCRIPT:-}" ] && [ -f "${R_SH_SCRIPT}" ]; then
+        dir="$(cd "$(dirname "$R_SH_SCRIPT")" && pwd)" 2>/dev/null || true
+      fi
+      if [ -z "$dir" ]; then
+        dir="$(r_sh_default_home)"
+      fi
+      if [ ! -d "$dir" ] || [ ! -w "$dir" ]; then
         echo "错误: 无法定位 r.sh 所在目录（来源: ${BASH_SOURCE[0]}）" >&2
-        echo "请用绝对路径运行，例如: bash /opt/R_SH/r.sh" >&2
-        echo "或设置: export R_SH_SCRIPT=/opt/R_SH/r.sh" >&2
+        echo "请 cd 到目标目录后运行，或使用: bash /path/to/r.sh" >&2
+        echo "或设置: export R_SH_HOME=\$(pwd)" >&2
+        echo "一键安装: bash <(curl -fsSL $R_SH_RAW_URL)" >&2
         exit 1
       fi
       ;;
@@ -52,6 +127,27 @@ resolve_script_dir() {
 }
 
 SCRIPT_DIR="$(resolve_script_dir)"
+export R_SH_HOME="$SCRIPT_DIR"
+
+# 进入数据根目录，后续安装与相对路径均以此为准
+if ! cd "$SCRIPT_DIR"; then
+  echo "错误: 无法进入数据目录: $SCRIPT_DIR" >&2
+  exit 1
+fi
+mkdir -p "$SCRIPT_DIR/tmp" "$SCRIPT_DIR/backups" 2>/dev/null || true
+
+# 将相对路径解析到 SCRIPT_DIR 下
+path_under_script_dir() {
+  local p="$1"
+  if [ -z "$p" ]; then
+    printf '%s' "$SCRIPT_DIR"
+    return 0
+  fi
+  case "$p" in
+    /*) printf '%s' "$p" ;;
+    *) printf '%s/%s' "$SCRIPT_DIR" "${p#./}" ;;
+  esac
+}
 
 # 创建目录（Compose / 持久化数据用）
 ensure_dir() {
@@ -131,7 +227,7 @@ CODEX_MODEL_PROVIDER="${CODEX_MODEL_PROVIDER:-token}"
 CODEX_BASE_URL="${CODEX_BASE_URL:-https://token.renzhe.org/v1}"
 CODEX_MODEL="${CODEX_MODEL:-gpt-5.4-mini}"
 CODEX_REASONING="${CODEX_REASONING:-medium}"
-CODEX_DIR="${CODEX_DIR:-$HOME/.codex}"
+CODEX_DIR="${CODEX_DIR:-$SCRIPT_DIR/.codex}"
 CODEX_CONFIG_FILE="${CODEX_CONFIG_FILE:-$CODEX_DIR/config.toml}"
 CODEX_AUTH_FILE="${CODEX_AUTH_FILE:-$CODEX_DIR/auth.json}"
 
@@ -142,10 +238,11 @@ pause() {
 
 print_header() {
   clear
-  cat <<'HEADER'
+  cat <<HEADER
 ==============================
   R_SH - 服务器运维脚本
 ==============================
+数据目录: ${SCRIPT_DIR}
 HEADER
 }
 
@@ -1041,8 +1138,9 @@ nginx_static_install() {
 
 nginx_static_start() {
   local site_dir
-  read -rp "请输入站点目录绝对路径: " site_dir
-  if [ -z "$site_dir" ] || [ ! -f "$site_dir/docker-compose.yml" ]; then
+  read -rp "请输入站点目录（默认站点根: $NGINX_STATIC_DIR）: " site_dir
+  site_dir="$(path_under_script_dir "${site_dir:-$NGINX_STATIC_DIR}")"
+  if [ ! -f "$site_dir/docker-compose.yml" ]; then
     echo "未找到站点 compose 文件，请先安装。"
     return 1
   fi
@@ -1056,8 +1154,9 @@ nginx_static_start() {
 
 nginx_static_stop() {
   local site_dir
-  read -rp "请输入站点目录绝对路径: " site_dir
-  if [ -z "$site_dir" ] || [ ! -f "$site_dir/docker-compose.yml" ]; then
+  read -rp "请输入站点目录（默认站点根: $NGINX_STATIC_DIR）: " site_dir
+  site_dir="$(path_under_script_dir "${site_dir:-$NGINX_STATIC_DIR}")"
+  if [ ! -f "$site_dir/docker-compose.yml" ]; then
     echo "未找到站点 compose 文件，请先安装。"
     return 1
   fi
@@ -1465,11 +1564,8 @@ ensure_backup_dir() {
 docker_backup_project() {
   ensure_backup_dir
   local source_dir archive_name timestamp archive_path
-  read -rp "请输入项目目录绝对路径: " source_dir
-  if [ -z "$source_dir" ]; then
-    echo "项目目录不能为空。"
-    return 1
-  fi
+  read -rp "请输入项目目录（默认: $SCRIPT_DIR）: " source_dir
+  source_dir="$(path_under_script_dir "${source_dir:-$SCRIPT_DIR}")"
 
   if [ ! -d "$source_dir" ]; then
     echo "项目目录不存在。"
@@ -1485,34 +1581,39 @@ docker_backup_project() {
 
 docker_restore_project() {
   local archive_path target_dir
-  read -rp "请输入备份文件绝对路径: " archive_path
+  read -rp "请输入备份文件（可填相对路径，目录: $backup_dir）: " archive_path
   if [ -z "$archive_path" ]; then
     echo "备份文件不能为空。"
     return 1
   fi
-
+  archive_path="$(path_under_script_dir "$archive_path")"
   if [ ! -f "$archive_path" ]; then
     echo "备份文件不存在。"
     return 1
   fi
 
-  read -rp "请输入恢复目标目录绝对路径: " target_dir
-  if [ -z "$target_dir" ]; then
-    echo "恢复目标目录不能为空。"
-    return 1
-  fi
-
+  read -rp "请输入恢复目标目录（默认: $SCRIPT_DIR）: " target_dir
+  target_dir="$(path_under_script_dir "${target_dir:-$SCRIPT_DIR}")"
   mkdir -p "$target_dir"
   tar -xzf "$archive_path" -C "$target_dir"
   echo "恢复完成。"
 }
 
 docker_delete_project() {
-  local project_dir
-  read -rp "请输入要删除的项目目录绝对路径: " project_dir
+  local project_dir confirm
+  read -rp "请输入要删除的项目目录（相对路径基于 $SCRIPT_DIR）: " project_dir
   if [ -z "$project_dir" ]; then
     echo "项目目录不能为空。"
     return 1
+  fi
+  project_dir="$(path_under_script_dir "$project_dir")"
+
+  if [ "$project_dir" = "$SCRIPT_DIR" ]; then
+    read -rp "将删除整个数据目录，确认请输入 DELETE: " confirm
+    if [ "$confirm" != "DELETE" ]; then
+      echo "已取消。"
+      return 1
+    fi
   fi
 
   if [ ! -e "$project_dir" ]; then
@@ -2606,7 +2707,8 @@ v2ray_agent_install() {
     return 1
   fi
 
-  local tmp_script="/tmp/v2ray-agent-install.sh"
+  local tmp_script="$SCRIPT_DIR/tmp/v2ray-agent-install.sh"
+  ensure_dir "$SCRIPT_DIR/tmp" || return 1
   if command -v wget >/dev/null 2>&1; then
     wget -O "$tmp_script" "${V2RAY_AGENT_INSTALL_URL}"
   elif command -v curl >/dev/null 2>&1; then
@@ -2630,7 +2732,8 @@ v2ray_agent_uninstall() {
     return 1
   fi
 
-  local tmp_script="/tmp/v2ray-agent-install.sh"
+  local tmp_script="$SCRIPT_DIR/tmp/v2ray-agent-install.sh"
+  ensure_dir "$SCRIPT_DIR/tmp" || return 1
   if command -v wget >/dev/null 2>&1; then
     wget -O "$tmp_script" "${V2RAY_AGENT_INSTALL_URL}"
   elif command -v curl >/dev/null 2>&1; then
