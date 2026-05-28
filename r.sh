@@ -125,6 +125,7 @@ CLI_PROXY_PORT="${CLI_PROXY_PORT:-8317}"
 CLI_PROXY_API_KEY="${CLI_PROXY_API_KEY:-change-me-to-your-api-key}"
 CLI_PROXY_DEBUG="${CLI_PROXY_DEBUG:-false}"
 CLI_PROXY_PROXY_URL="${CLI_PROXY_PROXY_URL:-}"
+CLI_PROXY_COMPOSE_URL="${CLI_PROXY_COMPOSE_URL:-https://raw.githubusercontent.com/3bDjrvHs50kiZIJb5/RZ_SH/main/cli-proxy-api/docker-compose.yml}"
 V2RAYA_DIR="${V2RAYA_DIR:-$SCRIPT_DIR/v2raya}"
 V2RAYA_IMAGE="${V2RAYA_IMAGE:-mzz2017/v2raya:v2.2.6.4}"
 V2RAYA_CONTAINER_NAME="${V2RAYA_CONTAINER_NAME:-v2raya}"
@@ -626,7 +627,23 @@ api-keys:
 EOF
 }
 
-cli_proxy_write_compose() {
+cli_proxy_download_compose() {
+  local output_file="$1"
+
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$CLI_PROXY_COMPOSE_URL" -o "$output_file"
+    return $?
+  fi
+
+  if command -v wget >/dev/null 2>&1; then
+    wget -qO "$output_file" "$CLI_PROXY_COMPOSE_URL"
+    return $?
+  fi
+
+  return 1
+}
+
+cli_proxy_write_compose_local() {
   local config_path auth_path log_path
 
   ensure_dir "$CLI_PROXY_DIR" "$CLI_PROXY_AUTH_PATH" "$CLI_PROXY_LOG_PATH" || return 1
@@ -659,6 +676,20 @@ services:
 EOF
 }
 
+cli_proxy_write_compose() {
+  local remote_compose="$CLI_PROXY_DIR/docker-compose.remote.yml"
+
+  ensure_dir "$CLI_PROXY_DIR" "$CLI_PROXY_AUTH_PATH" "$CLI_PROXY_LOG_PATH" || return 1
+  cli_proxy_write_config || return 1
+
+  if cli_proxy_download_compose "$remote_compose"; then
+    mv -f "$remote_compose" "$CLI_PROXY_DIR/docker-compose.yml"
+  else
+    rm -f "$remote_compose" 2>/dev/null || true
+    cli_proxy_write_compose_local
+  fi
+}
+
 cli_proxy_show_address() {
   local ip_addr
   ip_addr="$(detect_host_ip)"
@@ -676,7 +707,8 @@ cli_proxy_install() {
     return 0
   fi
 
-  cli_proxy_write_compose
+  echo "正在获取 CLIProxyAPI compose 文件..."
+  cli_proxy_write_compose || return 1
   (cd "$CLI_PROXY_DIR" && docker compose up -d)
   cli_proxy_show_address
 }
@@ -745,7 +777,12 @@ MENU
         echo "配置文件：$CLI_PROXY_CONFIG_PATH"
         echo "认证目录：$CLI_PROXY_AUTH_PATH"
         echo "日志目录：$CLI_PROXY_LOG_PATH"
+        echo "Compose 地址：$CLI_PROXY_COMPOSE_URL"
         echo "端口：$(cli_proxy_port_list)"
+        echo "API 端口：$CLI_PROXY_PORT"
+        echo "API Key：$CLI_PROXY_API_KEY"
+        echo "Debug：$CLI_PROXY_DEBUG"
+        echo "代理 URL：${CLI_PROXY_PROXY_URL:-（未设置）}"
         echo "API 端口：$CLI_PROXY_PORT"
         echo "API Key：$CLI_PROXY_API_KEY"
         echo "Debug：$CLI_PROXY_DEBUG"
